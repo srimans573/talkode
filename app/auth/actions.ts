@@ -4,18 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { AuthFormState } from "@/app/auth/form-state";
 import { isAuthRole } from "@/lib/auth/roles";
-import { getSiteUrl } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 
-type AuthField =
-  | "companyName"
-  | "email"
-  | "fullName"
-  | "password"
-  | "role";
-
-const PASSWORD_REQUIREMENT =
-  "Use at least 12 characters with uppercase, lowercase, and a number.";
+type AuthField = "email" | "password";
 
 function readFormString(formData: FormData, key: AuthField) {
   const value = formData.get(key);
@@ -24,15 +15,6 @@ function readFormString(formData: FormData, key: AuthField) {
 
 function validateEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function validatePassword(password: string) {
-  return (
-    password.length >= 12 &&
-    /[a-z]/.test(password) &&
-    /[A-Z]/.test(password) &&
-    /\d/.test(password)
-  );
 }
 
 function configurationError(): AuthFormState {
@@ -136,8 +118,8 @@ export async function signUp(
     fieldErrors.email = "Enter a valid work email.";
   }
 
-  if (!validatePassword(password)) {
-    fieldErrors.password = PASSWORD_REQUIREMENT;
+  if (!password) {
+    fieldErrors.password = "Enter your password.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {
@@ -170,7 +152,6 @@ export async function signUp(
         full_name: fallbackFullName,
         role,
       },
-      emailRedirectTo: `${getSiteUrl()}/auth/confirm?next=/dashboard`,
     },
     password,
   });
@@ -187,8 +168,20 @@ export async function signUp(
     redirect("/dashboard");
   }
 
+  const { data: signInData, error: signInError } =
+    await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+  if (!signInError && signInData.user) {
+    revalidatePath("/", "layout");
+    redirect("/dashboard");
+  }
+
   return {
-    message: "Check your inbox to verify your recruiter access.",
-    status: "success",
+    message:
+      "Account created, but Supabase did not return an active session. Check project auth settings to allow direct sign up.",
+    status: "error",
   };
 }

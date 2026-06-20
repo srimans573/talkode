@@ -1,9 +1,4 @@
-type AuthField =
-  | "companyName"
-  | "email"
-  | "fullName"
-  | "password"
-  | "role";
+type AuthField = "email" | "password";
 
 export type AuthFormState = {
   fieldErrors?: Partial<Record<AuthField, string>>;

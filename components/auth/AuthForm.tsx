@@ -1,18 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
-import { signUp } from "@/app/auth/actions";
+import { useActionState, useState } from "react";
+import { signIn, signUp } from "@/app/auth/actions";
 import {
   initialAuthState,
   type AuthFormState,
 } from "@/app/auth/form-state";
 
-type AuthFormProps = {
-  notice?: {
-    message: string;
-    status: AuthFormState["status"];
-  };
-};
+type AuthMode = "sign-in" | "sign-up";
 
 function cx(...classes: Array<string | false | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -120,13 +115,19 @@ function SubmitButton({
   );
 }
 
-export function AuthForm({ notice }: AuthFormProps) {
+export function AuthForm() {
+  const [mode, setMode] = useState<AuthMode>("sign-in");
+  const [signInState, signInAction, signInPending] = useActionState(
+    signIn,
+    initialAuthState,
+  );
   const [signUpState, signUpAction, signUpPending] = useActionState(
     signUp,
     initialAuthState,
   );
-
-  const activeNotice = notice ?? signUpState;
+  const activeState = mode === "sign-in" ? signInState : signUpState;
+  const pending = mode === "sign-in" ? signInPending : signUpPending;
+  const formAction = mode === "sign-in" ? signInAction : signUpAction;
 
   return (
     <section className="w-full max-w-85 border border-line bg-panel px-5 py-6">
@@ -134,32 +135,53 @@ export function AuthForm({ notice }: AuthFormProps) {
         <span className="text-base font-semibold text-secondary">chayote</span>
       </div>
 
-      <div className="mb-4">
-        <Message message={activeNotice.message} status={activeNotice.status} />
+      <div className="mb-4 grid grid-cols-2 border border-line p-1">
+        {(["sign-in", "sign-up"] as const).map((option) => (
+          <button
+            className={
+              mode === option
+                ? "h-8 bg-secondary text-xs font-semibold text-white"
+                : "h-8 text-xs font-semibold text-neutral transition duration-150 hover:text-secondary"
+            }
+            key={option}
+            onClick={() => setMode(option)}
+            type="button"
+          >
+            {option === "sign-in" ? "Sign in" : "Sign up"}
+          </button>
+        ))}
       </div>
 
-      <form action={signUpAction} className="space-y-3.5">
+      <div className="mb-4">
+        <Message message={activeState.message} status={activeState.status} />
+      </div>
+
+      <form action={formAction} className="space-y-3.5">
         <TextInput
           autoComplete="email"
-          error={signUpState.fieldErrors?.email}
+          error={activeState.fieldErrors?.email}
           label="Email"
           name="email"
           placeholder="name@company.com"
           type="email"
         />
         <TextInput
-          autoComplete="current-password"
-          error={signUpState.fieldErrors?.password}
+          autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
+          error={activeState.fieldErrors?.password}
           label="Password"
           name="password"
           placeholder="Password"
           type="password"
         />
-        <SubmitButton pending={signUpPending}>Sign up</SubmitButton>
+        <SubmitButton pending={pending}>
+          {mode === "sign-in" ? "Sign in" : "Sign up"}
+        </SubmitButton>
       </form>
 
       <p className="mt-4 text-center text-xs text-neutral">
-        Create your recruiter account with email and password.
+        {mode === "sign-in"
+          ? "Sign in with your recruiter account."
+          : "Create an account and go straight to the dashboard."}
       </p>
     </section>
   );
