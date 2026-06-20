@@ -1,8 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import Link from "next/link";
-import { signIn } from "@/app/auth/actions";
+import { signUp } from "@/app/auth/actions";
 import {
   initialAuthState,
   type AuthFormState,
@@ -122,15 +121,15 @@ function SubmitButton({
 }
 
 export function AuthForm({ notice }: AuthFormProps) {
-  const [signInState, signInAction, signInPending] = useActionState(
-    signIn,
+  const [signUpState, signUpAction, signUpPending] = useActionState(
+    signUp,
     initialAuthState,
   );
 
-  const activeNotice = notice ?? signInState;
+  const activeNotice = notice ?? signUpState;
 
   return (
-    <section className="w-full max-w-[340px] border border-line bg-panel px-5 py-6">
+    <section className="w-full max-w-85 border border-line bg-panel px-5 py-6">
       <div className="mb-5">
         <span className="text-base font-semibold text-secondary">chayote</span>
       </div>
@@ -139,10 +138,10 @@ export function AuthForm({ notice }: AuthFormProps) {
         <Message message={activeNotice.message} status={activeNotice.status} />
       </div>
 
-      <form action={signInAction} className="space-y-3.5">
+      <form action={signUpAction} className="space-y-3.5">
         <TextInput
           autoComplete="email"
-          error={signInState.fieldErrors?.email}
+          error={signUpState.fieldErrors?.email}
           label="Email"
           name="email"
           placeholder="name@company.com"
@@ -150,23 +149,17 @@ export function AuthForm({ notice }: AuthFormProps) {
         />
         <TextInput
           autoComplete="current-password"
-          error={signInState.fieldErrors?.password}
+          error={signUpState.fieldErrors?.password}
           label="Password"
           name="password"
           placeholder="Password"
           type="password"
         />
-        <SubmitButton pending={signInPending}>Sign in</SubmitButton>
+        <SubmitButton pending={signUpPending}>Sign up</SubmitButton>
       </form>
 
       <p className="mt-4 text-center text-xs text-neutral">
-        New to chayote?{" "}
-        <Link
-          className="font-medium text-secondary underline underline-offset-4 transition duration-150 hover:text-neutral"
-          href="/book-demo"
-        >
-          Get started
-        </Link>
+        Create your recruiter account with email and password.
       </p>
     </section>
   );

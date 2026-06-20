@@ -130,19 +130,7 @@ export async function signUp(
 ): Promise<AuthFormState> {
   const email = readFormString(formData, "email").toLowerCase();
   const password = readFormString(formData, "password");
-  const fullName = readFormString(formData, "fullName");
-  const companyName = readFormString(formData, "companyName");
-  const roleValue = readFormString(formData, "role");
-  const role = isAuthRole(roleValue) ? roleValue : undefined;
   const fieldErrors: AuthFormState["fieldErrors"] = {};
-
-  if (fullName.length < 2) {
-    fieldErrors.fullName = "Enter your full name.";
-  }
-
-  if (companyName.length < 2) {
-    fieldErrors.companyName = "Enter your company name.";
-  }
 
   if (!validateEmail(email)) {
     fieldErrors.email = "Enter a valid work email.";
@@ -150,10 +138,6 @@ export async function signUp(
 
   if (!validatePassword(password)) {
     fieldErrors.password = PASSWORD_REQUIREMENT;
-  }
-
-  if (!role) {
-    fieldErrors.role = "Choose recruiter or manager access.";
   }
 
   if (Object.keys(fieldErrors).length > 0) {
@@ -164,15 +148,11 @@ export async function signUp(
     };
   }
 
-  if (!role) {
-    return {
-      fieldErrors: {
-        role: "Choose recruiter or manager access.",
-      },
-      message: "Check the highlighted fields.",
-      status: "error",
-    };
-  }
+  const emailParts = email.split("@");
+  const fallbackFullName = emailParts[0]?.replace(/[._-]+/g, " ").trim() || email;
+  const fallbackCompanyName =
+    emailParts[1]?.replace(/[._-]+/g, " ").trim() || "Chayote";
+  const role = "recruiter" as const;
 
   let supabase: Awaited<ReturnType<typeof createClient>>;
 
@@ -186,8 +166,8 @@ export async function signUp(
     email,
     options: {
       data: {
-        company_name: companyName,
-        full_name: fullName,
+        company_name: fallbackCompanyName,
+        full_name: fallbackFullName,
         role,
       },
       emailRedirectTo: `${getSiteUrl()}/auth/confirm?next=/dashboard`,
@@ -197,8 +177,7 @@ export async function signUp(
 
   if (error) {
     return {
-      message:
-        "We could not create that recruiter account. Use a valid email and password.",
+      message: "We could not create that account. Use a valid email and password.",
       status: "error",
     };
   }

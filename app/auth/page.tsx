@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { AuthForm } from "@/components/auth/AuthForm";
 
 export const metadata: Metadata = {
-  title: "Sign In | Chayote",
-  description: "Email and password authentication for Chayote.",
+  title: "Sign Up | Chayote",
+  description: "Create a Chayote account with email and password.",
 };
 
 type AuthPageProps = {
