@@ -107,6 +107,12 @@ export async function joinAssessment(
     };
   }
 
+  const { data: rubricRow } = await supabase
+    .from("assessment_rubric_templates")
+    .select("content, codebase_template_id, assessments!inner(id)")
+    .eq("assessments.id", session.assessment_id)
+    .maybeSingle();
+
   return {
     session: {
       assessmentId: session.assessment_id,
@@ -117,7 +123,7 @@ export async function joinAssessment(
       technologies: session.technologies,
       timeLimitMinutes: session.time_limit_minutes,
       title: session.assessment_title,
-      rubric: session.rubric_text ?? "",
+      rubric: rubricRow?.content ?? "",
     },
     status: "ready",
   };

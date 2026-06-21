@@ -74,18 +74,14 @@ function StatusPill({
 }
 
 function EntryStep({
-  initialAccessCode,
   state,
   formAction,
   pending,
 }: {
   formAction: (payload: FormData) => void;
-  initialAccessCode: string;
   pending: boolean;
   state: CandidateEntryState;
 }) {
-  const hasInitialAccessCode = initialAccessCode.length > 0;
-
   return (
     <section className="grid min-h-screen bg-white px-4 py-8 sm:px-8 lg:grid-cols-[1fr_420px] lg:gap-8 lg:px-12">
       <div className="flex max-w-[720px] flex-col justify-center">
@@ -121,11 +117,9 @@ function EntryStep({
             Assessment code
             <input
               className="h-11 rounded-[3px] border border-[#dedbd5] bg-white px-3 font-mono text-[15px] uppercase tracking-[0.12em] outline-none focus:border-[#202322] focus:ring-2 focus:ring-[#d7ff5a]"
-              defaultValue={initialAccessCode}
               name="accessCode"
               placeholder="ABC123"
               required
-              autoFocus={!hasInitialAccessCode}
             />
             <FieldError message={state.fieldErrors?.accessCode} />
           </label>
@@ -133,7 +127,6 @@ function EntryStep({
           <label className="grid gap-1.5 text-sm font-medium text-[#202322]">
             Full name
             <input
-              autoFocus={hasInitialAccessCode}
               className="h-11 rounded-[3px] border border-[#dedbd5] bg-white px-3 text-[14px] outline-none focus:border-[#202322] focus:ring-2 focus:ring-[#d7ff5a]"
               name="fullName"
               placeholder="Avery Johnson"
@@ -454,11 +447,7 @@ function AssessmentStep({ session }: { session: CandidateAssessmentSession }) {
   return <InterviewWorkspace session={session} />;
 }
 
-export function CandidateAssessmentFlow({
-  initialAccessCode = "",
-}: {
-  initialAccessCode?: string;
-}) {
+export function CandidateAssessmentFlow() {
   const [entryState, formAction, pending] = useActionState(
     joinAssessment,
     initialCandidateEntryState,
@@ -492,11 +481,6 @@ export function CandidateAssessmentFlow({
   }
 
   return (
-    <EntryStep
-      formAction={formAction}
-      initialAccessCode={initialAccessCode}
-      pending={pending}
-      state={entryState}
-    />
+    <EntryStep formAction={formAction} pending={pending} state={entryState} />
   );
 }
