@@ -35,7 +35,7 @@ RUBRIC_ENFORCEMENT = """Rubric enforcement:
 - If the candidate gives a generic answer, ask one targeted follow-up that forces them to anchor the answer in the visible codebase.
 - Move on only after collecting code-specific evidence or clearly noting that the evidence is missing."""
 
-SHARED_SYSTEM = """You are a senior software engineer conducting a technical interview.
+SHARED_SYSTEM = f"""You are a senior software engineer conducting a technical interview.
 You are sitting next to the candidate as they code — not hosting a show, not teaching a class.
 
 Rules:
@@ -43,7 +43,9 @@ Rules:
 - Never use: "Great!", "Excellent!", "That's a good point", "Interesting!", or any filler affirmation.
 - Never lecture. Never give the answer directly.
 - Vary your phrasing every response — do not repeat the same sentence structure twice.
-- If you have nothing useful to add, respond with exactly: NONE"""
+- If you have nothing useful to add, respond with exactly: NONE
+
+{RUBRIC_ENFORCEMENT}"""
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +264,15 @@ async def _validate_and_followup(
     history: str, stage: int, guidelines: str, attempts: int = 1
 ) -> dict:
     force_advance = attempts >= 3
+    answer_quality_instruction = (
+        f"IMPORTANT: This area has been probed {attempts} times. "
+        "You MUST move on now regardless of answer quality. Either: affirm as "
+        "a solid/workable approach and advance, or acknowledge the gap and move on."
+        if force_advance
+        else """Decide based on the answer quality:
+- Fully correct or a reasonable working approach -> affirm clearly and ask the next rubric question.
+- Incorrect -> point at the specific thing to reconsider without saying "wrong". Ask one more focused question."""
+    )
 
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
@@ -279,9 +290,7 @@ Candidate just answered: "{utterance}"
 Current rubric stage: {stage}
 Times this area has been probed: {attempts}
 
-{"IMPORTANT: This area has been probed " + str(attempts) + " times. You MUST move on now regardless of answer quality. Either: affirm as a solid/workable approach and advance, or acknowledge the gap and move on." if force_advance else """Decide based on the answer quality:
-- Fully correct or a reasonable working approach → affirm clearly and ask the next rubric question.
-- Incorrect → point at the specific thing to reconsider without saying "wrong". Ask one more focused question."""}
+{answer_quality_instruction}
 
 Style illustrations ONLY — vary your phrasing, do not copy these:
 - "Right, that works. Now walk me through the edge case when the input is empty."
@@ -305,15 +314,32 @@ async def _validate_claim(
     history: str, stage: int, guidelines: str, attempts: int = 1
 ) -> str:
     force_advance = attempts >= 3
+    claim_instruction = (
+        f"IMPORTANT: This area has been probed {attempts} times. Wrap it up now - "
+        "affirm what they got right, briefly note what was missed if anything, "
+        "then move on to the next rubric area."
+        if force_advance
+        else """Confirm or correct their claim in 1-2 sentences.
+- If correct or a reasonable approach: affirm it clearly ("That's right" / "Solid") and optionally probe depth once more.
+- If incorrect: point at the specific thing to reconsider without saying "wrong"."""
+    )
 
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
 
-The candidate is stuck or confused. Give them ONE brief nudge - 1-2 sentences max. Speak like a colleague sitting next to them. Don't lecture. Don't give the answer away. Use plain, direct language. No "Great question!" or filler phrases.
+{RUBRIC_ENFORCEMENT}
 
-{"IMPORTANT: This area has been probed " + str(attempts) + " times. Wrap it up now — affirm what they got right, briefly note what was missed if anything, then move on to the next rubric area." if force_advance else """Confirm or correct their claim in 1-2 sentences.
-- If correct or a reasonable approach: affirm it clearly ("That's right" / "Solid") and optionally probe depth once more.
-- If incorrect: point at the specific thing to reconsider without saying "wrong"."""}
+Candidate's current code:
+{code}
+
+Conversation so far:
+{history}
+
+Candidate just claimed: "{utterance}"
+Current rubric stage: {stage}
+Times this area has been probed: {attempts}
+
+{claim_instruction}
 
 Style illustrations ONLY — vary your phrasing, do not copy these:
 - "Yeah, that holds. What about the worst case?"
@@ -355,18 +381,18 @@ async def _guide_response(
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
 
+{RUBRIC_ENFORCEMENT}
+
 Candidate's current code:
 {code}
 
 Conversation so far:
 {history}
 
-The candidate asked a question or made a statement about their approach. Do ONE of the following:
-1. If their answer is generic, ask a targeted follow-up that forces a concrete file, function, data field, state transition, failure mode, test, or tradeoff from this codebase.
-2. If their question shows they are ready to move to the next area of the rubric, ask the next natural interview question from the rubric - conversationally, like a curious engineer, not a scripted interviewer.
-3. If they need a nudge on the current area, give a brief practical hint (1-2 sentences).
+Candidate is stuck: "{utterance}"
+Current rubric stage: {stage}
 
-Give them ONE brief nudge — 1-2 sentences. Point at something concrete in the code or problem without giving the answer away.
+Give them ONE brief nudge - 1-2 sentences. Point at something concrete in the code or problem without giving the answer away.
 
 Style illustrations ONLY — vary your phrasing, do not copy these:
 - "Look at what happens in the loop when the list is empty."
@@ -381,6 +407,8 @@ async def _affirm_decision(
 ) -> str:
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
+
+{RUBRIC_ENFORCEMENT}
 
 Candidate's current code:
 {code}

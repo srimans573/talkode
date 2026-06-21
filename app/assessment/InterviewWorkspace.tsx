@@ -748,21 +748,35 @@ export function InterviewWorkspace({
   const [noteDraft, setNoteDraft] = useState("");
   const [notes, setNotes] = useState<CodeNote[]>([]);
 
-  const { status, messages, interim, error, sessionId, speaking, interviewComplete, start, end } =
-    useInterviewSession();
+  const {
+    status,
+    messages,
+    interim,
+    error,
+    sessionId,
+    interviewComplete,
+    start,
+    end,
+  } = useInterviewSession();
 
-  // Auto-end when agent signals all rubric areas are covered
   useEffect(() => {
     if (interviewComplete && status === "live") {
       void end();
     }
-  }, [interviewComplete, status, end]);
+  }, [end, interviewComplete, status]);
 
-  const activeFile = files.find((file) => file.path === activePath) ?? files[0] ?? null;
-  const activeName = activeFile ? activeFile.path.split("/").pop() : "";
-  const activeContent = activeFile
-    ? edits[activeFile.path] ?? activeFile.content
-    : "";
+  const t = themeTokens[theme];
+  const notesByLine = useMemo(
+    () => new Map(notes.map((note) => [note.id, note])),
+    [notes],
+  );
+  const activeFile =
+    files.find((file) => file.path === activePath) ??
+    files.find((file) => file.path === openTabs[0]) ??
+    null;
+  const stack = session.technologies
+    .map((technology) => technologyLabels[technology] ?? technology)
+    .join(" + ");
 
   const codeRef = useRef("");
   useEffect(() => {

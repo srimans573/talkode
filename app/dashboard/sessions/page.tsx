@@ -193,7 +193,9 @@ export default function InterviewSessionsPage() {
                           <div>
                             <span className="text-xs font-semibold text-[#202322]">{moment.label}</span>
                             {moment.quote ? (
-                              <p className="mt-0.5 text-xs text-[#62675e] leading-relaxed">"{moment.quote}"</p>
+                              <p className="mt-0.5 text-xs leading-relaxed text-[#62675e]">
+                                &quot;{moment.quote}&quot;
+                              </p>
                             ) : null}
                           </div>
                         </li>
