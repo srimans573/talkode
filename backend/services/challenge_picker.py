@@ -3,13 +3,14 @@ import os
 import random
 import re
 
-# Local LeetCode dataset (title/topics/difficulty/description/examples/constraints/
-# starter code per problem). Not part of the repo — point this at wherever the
-# dataset lives on the machine running the backend.
-_DATASET_PATH = os.environ.get(
-    "LEETCODE_DATASET_PATH",
-    "/Users/rishit/Downloads/leetcode-problems-master/merged_problems.json",
+# Trimmed LeetCode dataset bundled with the repo (backend/data/) — only the
+# Easy/Medium problems that have a reference solution, and only the fields
+# we actually use. Set LEETCODE_DATASET_PATH to point at the full raw
+# merged_problems.json instead (e.g. for local dev against the whole set).
+_DEFAULT_DATASET_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "data", "leetcode_problems.json"
 )
+_DATASET_PATH = os.environ.get("LEETCODE_DATASET_PATH", _DEFAULT_DATASET_PATH)
 
 _cache: list[dict] | None = None
 
