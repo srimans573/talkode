@@ -26,16 +26,22 @@ async def interview_ws(websocket: WebSocket, session_id: str):
 
     meta = json.loads(raw)
 
+    from services.tts import synthesize
+    from services.agent import extract_first_rubric_question, log_agent_turn
+
+    first_question = extract_first_rubric_question(meta.get("question_guidelines", ""))
+    opening = (
+        first_question
+        if first_question
+        else "Let's start with the README — what is this project, and what's the first thing you'd look at to understand how it's built?"
+    )
+
     intro = (
         f"Hi {meta['candidate_name']}, I'm your AI technical interviewer. "
         f"Today's session is {meta['problem_title']}. "
-        f"You have the codebase open in front of you. "
-        f"Walk me through how it works, explain the key decisions you see, and ask me if you get stuck. "
-        f"Go ahead whenever you're ready."
+        f"You have the codebase open in front of you — ask me if you get stuck. "
+        f"{opening}"
     )
-
-    from services.tts import synthesize
-    from services.agent import log_agent_turn
 
     intro_audio = await synthesize(intro)
     if intro_audio:
@@ -107,7 +113,7 @@ async def interview_ws(websocket: WebSocket, session_id: str):
             await websocket.send_json({"type": "transcript_chunk", "text": sentence, "is_final": True})
 
             try:
-                response = await maybe_respond(session_id, r)
+                response, challenge_ready = await maybe_respond(session_id, r)
                 if response:
                     from services.tts import synthesize
                     audio_b64 = await synthesize(response)
@@ -118,6 +124,9 @@ async def interview_ws(websocket: WebSocket, session_id: str):
                             "audio_b64": audio_b64,
                         })
                     await websocket.send_json({"type": "agent_response", "text": response})
+
+                    if challenge_ready:
+                        await websocket.send_json({"type": "coding_challenge_ready"})
 
                     if await r.get(f"session:{session_id}:interview_complete"):
                         await websocket.send_json({"type": "interview_complete"})

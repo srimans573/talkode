@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 
 import redis.asyncio as redis
@@ -111,6 +112,39 @@ async def increment_stage_attempts(session_id: str, r: redis.Redis) -> int:
     return int(val)
 
 
+def extract_first_rubric_question(guidelines: str) -> str | None:
+    """Pulls the first "Ask: ..." line out of the rubric text (the format
+    produced by the assessment-creation flow, e.g. "## Q1: API Layer\nAsk:
+    Walk me through..."), so the interview can open with a concrete question
+    instead of a generic "explain the whole codebase" prompt."""
+    match = re.search(r"Ask:\s*(.+)", guidelines or "")
+    return match.group(1).strip() if match else None
+
+
+# ---------------------------------------------------------------------------
+# Coding-challenge trigger — fires once a topic has just closed (i.e. right
+# after advance_stage()) and the candidate has demonstrated real
+# understanding, measured by how many answers the agent has actually
+# affirmed (correct_answer events), not just raw stage count. Raw stage
+# count is a weak signal since _validate_and_followup is biased to advance
+# even on partial answers.
+# ---------------------------------------------------------------------------
+
+CHALLENGE_READY_THRESHOLD = 2
+
+
+async def get_correct_answer_count(session_id: str, r: redis.Redis) -> int:
+    raw = await r.lrange(f"session:{session_id}:events", 0, -1)
+    return sum(1 for e in raw if json.loads(e).get("type") == "correct_answer")
+
+
+async def should_trigger_challenge(session_id: str, r: redis.Redis) -> bool:
+    if await r.get(f"session:{session_id}:challenge_triggered"):
+        return False
+    count = await get_correct_answer_count(session_id, r)
+    return count >= CHALLENGE_READY_THRESHOLD
+
+
 # ---------------------------------------------------------------------------
 # Intent classifier
 # ---------------------------------------------------------------------------
@@ -175,13 +209,17 @@ Intent:"""
 # Main entry point
 # ---------------------------------------------------------------------------
 
-async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
+async def maybe_respond(session_id: str, r: redis.Redis) -> tuple[str | None, bool]:
+    """Returns (response_text, challenge_ready). challenge_ready is True at
+    most once per session — the moment right after a topic closes via an
+    affirmed answer, once the candidate has demonstrated enough understanding
+    (see should_trigger_challenge)."""
     raw_chunks = await r.lrange(f"session:{session_id}:transcript_chunks", -1, -1)
     if not raw_chunks:
-        return None
+        return None, False
     utterance = json.loads(raw_chunks[0])["text"].strip()
     if not utterance:
-        return None
+        return None, False
 
     history = await get_conversation_history(session_id, r)
     last_agent = _last_agent_turn(history)
@@ -192,14 +230,14 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
     await log_candidate_turn(session_id, r, utterance, intent)
 
     if intent == "filler":
-        return None
+        return None, False
 
     if intent == "unclear":
-        return random.choice(UNCLEAR_RESPONSES)
+        return random.choice(UNCLEAR_RESPONSES), False
 
     meta_raw = await r.get(f"session:{session_id}:meta")
     if not meta_raw:
-        return None
+        return None, False
     meta = json.loads(meta_raw)
 
     code_raw = await r.get(f"session:{session_id}:latest_code")
@@ -207,10 +245,21 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
     stage = await get_stage(session_id, r)
     guidelines = meta.get("question_guidelines", "")
     history_text = _format_history(history)
+    challenge_ready = False
 
     if intent == "answer":
         attempts = await increment_stage_attempts(session_id, r)
-        result = await _validate_and_followup(meta, code, utterance, last_agent, history_text, stage, guidelines, attempts)
+        # If affirming this answer would cross the challenge threshold, tell
+        # the model up front so it gives a clean closing line instead of its
+        # usual "affirm + immediately ask the next rubric question" — that
+        # combo would otherwise abandon a brand-new question the moment the
+        # challenge interrupts.
+        current_count = await get_correct_answer_count(session_id, r)
+        already_triggered = bool(await r.get(f"session:{session_id}:challenge_triggered"))
+        about_to_pause = (not already_triggered) and (current_count + 1 >= CHALLENGE_READY_THRESHOLD)
+        result = await _validate_and_followup(
+            meta, code, utterance, last_agent, history_text, stage, guidelines, attempts, about_to_pause
+        )
         response = result["response"]
         if result.get("affirmed") and result.get("label"):
             await r.rpush(f"session:{session_id}:events", json.dumps({
@@ -227,6 +276,10 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
             log.info("[interview] marked complete")
         elif response and "NONE" not in response.upper():
             await advance_stage(session_id, r)
+            if await should_trigger_challenge(session_id, r):
+                await r.set(f"session:{session_id}:challenge_triggered", "1")
+                challenge_ready = True
+                log.info("[challenge] trigger condition met — challenge_ready=True")
     elif intent == "claim":
         attempts = await increment_stage_attempts(session_id, r)
         response = await _validate_claim(meta, code, utterance, history_text, stage, guidelines, attempts)
@@ -245,12 +298,12 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
     elif intent == "off_topic":
         response = await _redirect_offtopic(meta, last_agent)
     else:
-        return None
+        return None, False
 
     log.info(f"[agent] response: {response!r}")
 
     if not response or "NONE" in response.upper():
-        return None
+        return None, False
 
     await log_agent_turn(session_id, r, response)
 
@@ -265,7 +318,7 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
     }
     await r.rpush(f"session:{session_id}:events", json.dumps(event))
 
-    return response
+    return response, challenge_ready
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +327,38 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> str | None:
 
 async def _validate_and_followup(
     meta: dict, code: str, utterance: str, last_agent: str | None,
-    history: str, stage: int, guidelines: str, attempts: int = 1
+    history: str, stage: int, guidelines: str, attempts: int = 1,
+    about_to_pause: bool = False,
 ) -> dict:
     force_advance = attempts >= 2
+
+    if about_to_pause:
+        instruction = """The conversation is about to pause for a short coding detour right after this turn.
+- If the answer is reasonable or correct: affirm it briefly in 1 sentence and STOP THERE — do NOT ask a new
+  follow-up question, do NOT introduce the next rubric topic. The pause is coming next, not a new question.
+- If the answer is clearly wrong: correct one specific thing in 1 sentence, still without asking a new question.
+- This turn should read as a clean stopping point, not a transition into something else."""
+    elif force_advance:
+        instruction = (
+            f"IMPORTANT: This area has been probed {attempts} times. Move on now — affirm what they got and "
+            "ask the next rubric question regardless of how complete the answer was."
+        )
+    else:
+        instruction = """Bias toward accepting and moving on. Only push back if the answer is clearly wrong or reveals a dangerous misconception.
+- Reasonable or partially correct → affirm and move to the next rubric question immediately.
+- Clearly wrong → correct one specific thing in one sentence, then still move to the next rubric question.
+- Do NOT ask a follow-up clarifying question in the same area. Either affirm and advance, or correct and advance."""
+
+    if about_to_pause:
+        style_illustrations = """- "Yeah, that holds up."
+- "Close enough — that's the right idea."
+- "Not quite on that part, but the rest of the approach is solid.\""""
+        response_field_note = ", and NO question mark anywhere in it"
+    else:
+        style_illustrations = """- "Yeah that's right. How does the data get from fetchEmployees to the UI?"
+- "Close enough — the approach works. Walk me through what useEmployees is doing."
+- "Not quite on the error part, but let's keep moving — how does data flow to the components?\""""
+        response_field_note = ""
 
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
@@ -292,26 +374,42 @@ Candidate just answered: "{utterance}"
 Current rubric stage: {stage}
 Times this area has been probed: {attempts}
 
-{"IMPORTANT: This area has been probed " + str(attempts) + " times. Move on now — affirm what they got and ask the next rubric question regardless of how complete the answer was." if force_advance else """Bias toward accepting and moving on. Only push back if the answer is clearly wrong or reveals a dangerous misconception.
-- Reasonable or partially correct → affirm and move to the next rubric question immediately.
-- Clearly wrong → correct one specific thing in one sentence, then still move to the next rubric question.
-- Do NOT ask a follow-up clarifying question in the same area. Either affirm and advance, or correct and advance."""}
+{instruction}
 
 Style illustrations ONLY — vary your phrasing, do not copy these:
-- "Yeah that's right. How does the data get from fetchEmployees to the UI?"
-- "Close enough — the approach works. Walk me through what useEmployees is doing."
-- "Not quite on the error part, but let's keep moving — how does data flow to the components?"
+{style_illustrations}
 
 Return a JSON object with exactly these fields:
 {{
-  "response": "what you say to the candidate — spoken aloud, 1-3 sentences, no filler affirmations",
+  "response": "what you say to the candidate — spoken aloud, 1-3 sentences, no filler affirmations{response_field_note}",
   "affirmed": true if the candidate's answer was correct or acceptable, false if you are pushing back,
   "label": "if affirmed=true: a short past-tense phrase for the insight log, e.g. 'correctly identified O(n log n) time complexity'. Empty string if affirmed=false.",
   "interview_complete": true if ALL areas of the rubric have now been covered and there is nothing meaningful left to ask, false otherwise. If complete, the response should be a natural closing statement — thank the candidate and let them know the session is done.
 }}"""
 
     raw = await _call_openai_json(SHARED_SYSTEM, user)
-    return raw if isinstance(raw, dict) else {"response": str(raw), "affirmed": False, "label": ""}
+    result = raw if isinstance(raw, dict) else {"response": str(raw), "affirmed": False, "label": ""}
+
+    # Defense in depth: the model doesn't always obey "don't ask a question"
+    # reliably, so deterministically strip any trailing question sentence
+    # rather than relying on the prompt alone.
+    if about_to_pause and isinstance(result.get("response"), str):
+        result["response"] = _strip_trailing_questions(result["response"])
+
+    return result
+
+
+def _strip_trailing_questions(text: str) -> str:
+    # Split on sentence boundaries AND on ", but/so/and/yet" clause joins —
+    # the model sometimes bundles the affirmation and the forbidden question
+    # into one compound sentence ("X, but can you clarify Y?") rather than
+    # two separate ones, which a sentence-only split would miss entirely.
+    parts = re.split(r"(?<=[.!?])\s+|,\s+(?=but\b|so\b|and\b|yet\b)", text.strip())
+    kept = [p for p in parts if "?" not in p]
+    cleaned = " ".join(p.rstrip(",").strip() for p in kept).strip()
+    if cleaned and not cleaned.endswith((".", "!")):
+        cleaned += "."
+    return cleaned or "Got it."
 
 
 async def _validate_claim(
