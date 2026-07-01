@@ -358,7 +358,7 @@ export function InvitePanel({ assessmentId, invites: initial }: Props) {
                     <p className="truncate text-xs text-[#62675e]">{invite.email}</p>
                   )}
                   {!invite.candidateId && invite.name && (
-                    <p className="truncate text-xs text-[#62675e]">{invite.name}</p>
+                    <p className="truncate text-xs text-[#62675e]">{invite.email}</p>
                   )}
                   <div className="mt-1 flex items-center gap-1.5">
                     <span className={cx("inline-block h-1.5 w-1.5 rounded-full", STATUS_DOT[display])} />
