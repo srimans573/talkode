@@ -24,8 +24,11 @@ export type RubricSource = Database["public"]["Enums"]["rubric_source"];
 export type DashboardAssessment = {
   candidateCount: number;
   candidateAccessCode: string;
+  codebaseSource: string;
+  codbbaseSpec: Database["public"]["Tables"]["assessments"]["Row"]["codebase_spec"];
   codebaseTemplateId: string | null;
   completionPercent: number;
+  dueAt: string | null;
   dueLabel: string;
   id: string;
   jobDescription: string;
@@ -35,6 +38,7 @@ export type DashboardAssessment = {
   technologyLabel: string;
   timeLimitMinutes: number;
   rubricSource: RubricSource;
+  rubricText: string;
   status: AssessmentStatus;
   statusLabel: string;
   title: string;
@@ -155,8 +159,11 @@ function formatAssessment(row: AssessmentRow): DashboardAssessment {
   return {
     candidateCount: 0,
     candidateAccessCode: row.candidate_access_code,
+    codebaseSource: row.codebase_source,
+    codbbaseSpec: row.codebase_spec,
     codebaseTemplateId: row.codebase_template_id,
     completionPercent: row.completion_percent,
+    dueAt: row.due_at,
     dueLabel: row.due_at ? formatDate(row.due_at) : "No due date",
     id: row.id,
     jobDescription: row.job_description,
@@ -166,6 +173,7 @@ function formatAssessment(row: AssessmentRow): DashboardAssessment {
     technologyLabel,
     timeLimitMinutes: row.time_limit_minutes,
     rubricSource: row.rubric_source,
+    rubricText: row.rubric_text,
     status: row.status,
     statusLabel: assessmentStatusLabels[row.status],
     title: row.title,
@@ -314,7 +322,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     supabase
       .from("assessments")
       .select(
-        "id, organization_id, title, role_name, status, time_limit_minutes, technologies, frontend_technology, backend_technology, job_description, codebase_template_id, rubric_source, rubric_text, candidate_access_code, due_at, completion_percent, median_score, created_by, created_at, updated_at",
+        "id, organization_id, title, role_name, status, time_limit_minutes, technologies, frontend_technology, backend_technology, job_description, codebase_template_id, rubric_source, rubric_text, rubric_topics, candidate_access_code, due_at, completion_percent, median_score, hm_spec, codebase_source, codebase_spec, created_by, created_at, updated_at",
       )
       .eq("organization_id", profile.organization_id)
       .order("updated_at", { ascending: false }),
@@ -471,7 +479,7 @@ export async function getAssessmentDetailsData(
   const { data: assessment, error: assessmentError } = await supabase
     .from("assessments")
     .select(
-      "id, organization_id, title, role_name, status, time_limit_minutes, technologies, frontend_technology, backend_technology, job_description, codebase_template_id, rubric_source, rubric_text, candidate_access_code, due_at, completion_percent, median_score, created_by, created_at, updated_at",
+      "id, organization_id, title, role_name, status, time_limit_minutes, technologies, frontend_technology, backend_technology, job_description, codebase_template_id, rubric_source, rubric_text, rubric_topics, candidate_access_code, due_at, completion_percent, median_score, hm_spec, codebase_source, codebase_spec, created_by, created_at, updated_at",
     )
     .eq("id", assessmentId)
     .eq("organization_id", profile.organization_id)
@@ -493,9 +501,14 @@ export async function getAssessmentDetailsData(
     };
   }
 
+  const { count: candidateCount } = await supabase
+    .from("candidates")
+    .select("id", { count: "exact", head: true })
+    .eq("assessment_id", assessmentId);
+
   if (!assessment.codebase_template_id) {
     return {
-      assessment: formatAssessment(assessment),
+      assessment: { ...formatAssessment(assessment), candidateCount: candidateCount ?? 0 },
       codebaseFiles: [],
     };
   }
@@ -508,14 +521,14 @@ export async function getAssessmentDetailsData(
 
   if (filesError) {
     return {
-      assessment: formatAssessment(assessment),
+      assessment: { ...formatAssessment(assessment), candidateCount: candidateCount ?? 0 },
       codebaseFiles: [],
       error: filesError.message,
     };
   }
 
   return {
-    assessment: formatAssessment(assessment),
+    assessment: { ...formatAssessment(assessment), candidateCount: candidateCount ?? 0 },
     codebaseFiles: (codebaseFiles ?? []).map(formatCodebaseFile),
   };
 }
