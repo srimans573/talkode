@@ -6,16 +6,19 @@ import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { getInsights, type SessionInsights } from "@/lib/voiceAgent";
 
 function scoreColor(score: number) {
-  if (score >= 4) return "bg-[#d7ff5a]";
-  if (score >= 3) return "bg-[#fde68a]";
-  return "bg-[#fecaca]";
+  if (score >= 4) return "bg-[#d7ff5a]";   // lime — Excellent
+  if (score >= 3) return "bg-[#86efac]";   // green — Strong
+  if (score >= 2) return "bg-[#fde68a]";   // yellow — Developing
+  if (score >= 1) return "bg-[#fca5a5]";   // red-light — Needs work
+  return "bg-[#e5e7eb]";                    // grey — Not reached
 }
 
 function scoreLabel(score: number) {
-  if (score >= 4.5) return "Excellent";
-  if (score >= 3.5) return "Strong";
-  if (score >= 2.5) return "Developing";
-  return "Needs work";
+  if (score >= 4) return "Excellent";
+  if (score >= 3) return "Strong";
+  if (score >= 2) return "Developing";
+  if (score >= 1) return "Needs work";
+  return "Not reached";
 }
 
 function Results({ sessionId }: { sessionId: string }) {
@@ -77,10 +80,10 @@ function Results({ sessionId }: { sessionId: string }) {
     );
   }
 
-  const avgScore =
-    insights.rubric_scores?.length > 0
-      ? insights.rubric_scores.reduce((s, r) => s + r.score, 0) /
-        insights.rubric_scores.length
+  const rubricScores = insights.rubric_scores ?? [];
+  const overallScore =
+    rubricScores.length > 0
+      ? rubricScores.reduce((s, r) => s + r.score, 0) / 4
       : null;
 
   return (
@@ -95,12 +98,12 @@ function Results({ sessionId }: { sessionId: string }) {
           <p className="mt-2 text-sm text-[#62675e]">
             Here's personalised feedback based on your interview.
           </p>
-          {avgScore !== null && (
+          {overallScore !== null && (
             <div className="mt-6 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 shadow-sm ring-1 ring-[#e8e6e1]">
               <span className="text-2xl font-black text-[#202322]">
-                {avgScore.toFixed(1)}
+                {overallScore.toFixed(1)}
               </span>
-              <span className="text-sm text-[#62675e]">/ 5 overall</span>
+              <span className="text-sm text-[#62675e]">/ {rubricScores.length} overall</span>
             </div>
           )}
         </div>
@@ -169,7 +172,7 @@ function Results({ sessionId }: { sessionId: string }) {
                   <div className="h-2 w-full overflow-hidden rounded-full bg-[#f0eeea]">
                     <div
                       className={`h-full rounded-full transition-all ${scoreColor(item.score)}`}
-                      style={{ width: `${(item.score / 5) * 100}%` }}
+                      style={{ width: `${(item.score / 4) * 100}%` }}
                     />
                   </div>
                   {item.reason && (
