@@ -90,11 +90,18 @@ Evaluate two things:
    - "broken": the gap is more than a small mechanical fix, the description is essentially just examples with no
      problem statement, or the question is confusing/ambiguous/missing information needed to solve it.
 
+3. FRAMING: if the problem is relevant, write one sentence (≤20 words) that a human interviewer would say
+   to bridge from the candidate's codebase to this problem. Reference something concrete from the codebase
+   context — a specific file, component, or behaviour the candidate just discussed. Do NOT say "our session
+   store" or anything generic. Example: "Your fetchEmployees function does a lot of repeated lookups —
+   let's try a data structure problem that keeps those fast."
+
 Return a JSON object with exactly these fields:
 {{
   "relevant": true or false,
   "status": "complete" or "fixable" or "broken",
   "fixed_description": "corrected description text if status is fixable, otherwise empty string",
+  "framing": "one-sentence bridge from the codebase to this problem (empty string if not relevant)",
   "reason": "one short sentence explaining the relevance and/or completeness verdict"
 }}"""
 
@@ -110,7 +117,7 @@ Return a JSON object with exactly these fields:
         return result
     except Exception as e:
         print(f"[challenge] evaluation failed, treating as usable: {e}")
-        return {"relevant": True, "status": "complete", "fixed_description": "", "reason": "evaluation skipped (error)"}
+        return {"relevant": True, "status": "complete", "fixed_description": "", "framing": "", "reason": "evaluation skipped (error)"}
 
 
 async def _grade_submission(
@@ -264,6 +271,7 @@ async def start_challenge(session_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=503, detail="No coding challenge available")
 
     problem = None
+    chosen_framing = None
     for candidate in pool:
         verdict = await _evaluate_candidate(candidate, codebase_context)
         if not verdict.get("relevant") or verdict["status"] == "broken":
@@ -272,10 +280,12 @@ async def start_challenge(session_id: str, background_tasks: BackgroundTasks):
         if verdict["status"] == "fixable" and verdict.get("fixed_description"):
             candidate = {**candidate, "description": verdict["fixed_description"]}
         problem = candidate
+        chosen_framing = verdict.get("framing") or candidate.get("intro", "")
         break
     if problem is None:
         print(f"[challenge] no candidate passed evaluation for session {session_id}, falling back")
         problem = pool[0]
+        chosen_framing = problem.get("intro", "")
 
     await r.set(f"session:{session_id}:challenge", json.dumps(problem))
 
@@ -284,13 +294,14 @@ async def start_challenge(session_id: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(_prime_harnesses, frontend_id, problem, r)
 
     intro_text = (
-        f"Let's pause for a quick coding detour. {problem['intro']} "
+        f"Let's pause for a quick coding detour. {chosen_framing} "
         f"Here's the problem: {problem['title']}. Take a few minutes, then submit when you're ready."
     )
     await log_agent_turn(session_id, r, intro_text)
     audio_b64 = await synthesize(intro_text)
 
     candidate_problem = {k: v for k, v in problem.items() if k != "solution"}
+    candidate_problem["intro"] = chosen_framing  # replace hardcoded topic framing with codebase-specific one
 
     return {"problem": candidate_problem, "intro_text": intro_text, "intro_audio_b64": audio_b64}
 

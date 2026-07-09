@@ -176,10 +176,11 @@ Starter code (shows the function/method signature you must call):
 TASK: Write ONLY the test runner code (no markdown, no fences, no explanation).
 
 The runner must:
-1. Include 1 visible test per example in the problem (marked visible=true). Use the EXACT expected output from the examples above.
-2. Include 4-6 hidden edge-case tests (marked visible=false). These cover: empty inputs, single element, all same values, negatives, large values, performance edge cases.
+1. Include EXACTLY 2-3 visible tests (marked visible=true). Use ONLY the first 2-3 examples — do NOT make visible tests from every example even if there are more. Visible tests are shown to the candidate.
+2. Include EXACTLY 3-4 hidden tests (marked visible=false). REQUIRED — never skip these. They cover edge cases: empty inputs, single element, all same values, large N, boundary values. These are NOT shown to the candidate.
 3. Each test call must be wrapped in try/except (or try/catch) so one failure does not abort all tests.
 4. Output a single JSON array to stdout. Each element must have: desc (string), visible (bool), passed (bool), actual (any), expected (any). Optionally: error (string).
+   The desc must describe the actual input, e.g. "Example 1: nums=[2,7], target=9" or "Edge: empty string". NEVER use generic names like "Visible Test 1", "Hidden Test 2", "Test Case 3", etc.
 5. For order-independent results (like indices), sort before comparing.
 6. CRITICAL — DO NOT include any import/include/using/require statements in the harness. Standard library imports are already prepended before the candidate's code by the test runner. Adding imports again will cause compile errors (Java: "class expected", C++: duplicate headers, etc.).
 7. CRITICAL: The entire harness must exit with code 0 no matter what.
@@ -187,7 +188,7 @@ The runner must:
    - For Java/C++/C#: wrap ALL test calls in one outer try/catch and print whatever you have so far on error. Keep the catch block to 1 simple line — never put a long JSON string literal in a catch clause (it will break if truncated).
    - The fallback output should be SHORT: e.g. `System.out.println("[]");` or `cout << "[]";` — not a full JSON error object.
 8. Keep the harness as concise as possible. Avoid long helper comments or repeated boilerplate. Every token counts.
-9. CRITICAL: Keep the entire harness under 65 lines total. If the problem has many examples, use only the first 3 visible tests and at most 4 hidden tests. Truncated harnesses cause compile errors.
+9. CRITICAL: Keep the entire harness under 65 lines total. Truncated harnesses cause compile errors.
 
 Here is a complete Python example for Two Sum to illustrate the required output format and structure:
 {_PYTHON_EXAMPLE}
@@ -225,6 +226,11 @@ async def get_or_generate_harness(
 
     try:
         harness = await _generate_harness(problem, language)
+        # Validate: harness must have at least one hidden test. If not, regenerate once
+        # at higher temperature so the model doesn't produce the same all-visible output.
+        if "visible=false" not in harness and '"visible": false' not in harness and "'visible': False" not in harness and "false" not in harness.lower():
+            log.warning("Harness for %s/%s has no hidden tests — regenerating", frontend_id, language)
+            harness = await _generate_harness(problem, language)
         await r.set(key, harness)
         log.info("Generated harness for %s/%s (%d chars)", frontend_id, language, len(harness))
         return harness

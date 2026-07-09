@@ -46,7 +46,11 @@ Rules:
 - Never use: "Great!", "Excellent!", "That's a good point", "Interesting!", or any filler affirmation.
 - Never lecture. Never give the answer directly.
 - Vary your phrasing every response — do not repeat the same sentence structure twice.
-- If you have nothing useful to add, respond with exactly: NONE"""
+- ALWAYS end with a question or a clear prompt for the candidate to continue — never end on a bare statement that leaves them nothing to respond to.
+- If you have nothing useful to add, respond with exactly: NONE
+- If a prior agent turn in the conversation ends with "[interrupted]", the candidate cut you off
+  and did not hear that full response. Do not assume they received it — do not reference or
+  build on anything from that interrupted turn."""
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +85,20 @@ def _last_agent_turn(history: list[dict]) -> str | None:
         if turn["role"] == "agent":
             return turn["text"]
     return None
+
+
+def _is_echo(utterance: str, last_agent: str) -> bool:
+    """Return True if the utterance looks like the mic picked up the agent's own audio.
+
+    Requires at least 5 words in the utterance AND ≥75% of those words appear
+    verbatim in the last agent turn. Short candidate replies ("yeah", "ok")
+    and genuine paraphrasing (low overlap) both pass through correctly."""
+    words_u = utterance.lower().split()
+    if len(words_u) < 5:
+        return False
+    words_a = set(last_agent.lower().split())
+    overlap = sum(1 for w in words_u if w in words_a) / len(words_u)
+    return overlap >= 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +244,12 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> tuple[str | None, bo
 
     history = await get_conversation_history(session_id, r)
     last_agent = _last_agent_turn(history)
+
+    # Echo guard: if the utterance closely resembles the last agent turn, the
+    # mic likely picked up the agent's own speaker output. Drop it silently.
+    if last_agent and _is_echo(utterance, last_agent):
+        log.warning(f"[echo-guard] dropping utterance resembling agent turn: {utterance!r}")
+        return None, False
 
     # If we're waiting on confirmation to end the interview, check whether the
     # candidate just gave an affirmative before running the full classifier.
@@ -374,15 +398,15 @@ async def _validate_and_followup(
         )
     elif attempts == 2:
         instruction = (
-            "The candidate's first answer touched on part of this area but likely missed something important. "
-            "Give them ONE specific nudge — point at the gap or hint at what to look for, WITHOUT giving the answer directly. "
-            "Do NOT ask a new rubric question yet; stay on the current topic to give them a chance to fill the gap."
+            "The candidate's first answer touched on this area but missed something. "
+            "Give ONE specific nudge that points at the gap — then immediately ask a direct follow-up question "
+            "so they can fill it in. Do NOT just make a statement and go silent. End with a question."
         )
     else:
-        instruction = """Bias toward accepting and moving on. Only push back if the answer is clearly wrong or reveals a dangerous misconception.
-- Reasonable or partially correct → affirm and move to the next rubric question immediately.
-- Clearly wrong → correct one specific thing in one sentence, then still move to the next rubric question.
-- Do NOT ask a follow-up clarifying question in the same area. Either affirm and advance, or correct and advance."""
+        instruction = """Bias toward accepting and moving on.
+- Reasonable or partially correct → affirm briefly and ask the next rubric question.
+- Clearly wrong or has a misconception → correct one specific thing, then ask a targeted follow-up question to help them find the answer. Do NOT just state the correction and wait silently.
+- RULE: every response must end with either a question or a clear invitation to continue."""
 
     if about_to_pause:
         style_illustrations = """- "Yeah, that holds up."
@@ -390,14 +414,14 @@ async def _validate_and_followup(
 - "Not quite on that part, but the rest of the approach is solid.\""""
         response_field_note = ", and NO question mark anywhere in it"
     elif attempts == 2:
-        style_illustrations = """- "Take a closer look at how error states propagate up from that function."
-- "Think about what happens if the API returns a non-200 — where does that get handled right now?"
-- "You're on the right track — what would break if the sort were skipped?\""""
+        style_illustrations = """- "You're close — what specifically triggers the component to re-render when the data arrives?"
+- "Take another look at the hook — what does set employees do to the component that uses it?"
+- "That part's not quite right — what do you think actually causes the UI to update when state changes?\""""
         response_field_note = ""
     else:
-        style_illustrations = """- "Yeah that's right. How does the data get from fetchEmployees to the UI?"
-- "Close enough — the approach works. Walk me through what useEmployees is doing."
-- "Not quite on the error part, but let's keep moving — how does data flow to the components?\""""
+        style_illustrations = """- "Yeah that's right — how does that data get to the UI components?"
+- "Close enough. Walk me through what useEmployees is actually doing under the hood."
+- "Not quite on the auto-reload part — what specifically triggers the component to re-render?\""""
         response_field_note = ""
 
     user = f"""Interview rubric:

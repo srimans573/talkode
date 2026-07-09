@@ -100,6 +100,12 @@ export function useInterviewSession() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const agentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioQueueRef = useRef<string[]>([]);
+  const isPlayingAudioRef = useRef<boolean>(false);
+  // Timestamp until which the mic stays muted after agent audio ends.
+  // Browser audio device buffers mean the speaker still physically resonates
+  // for ~200–400ms after onended fires, so we hold the gate a bit longer.
+  const micGraceUntilRef = useRef<number>(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const videoStreamRef = useRef<MediaStream | null>(null);
@@ -116,28 +122,69 @@ export function useInterviewSession() {
     setMessages((prev) => [...prev, { id: randomId(), role, text }]);
   }, []);
 
-  // Plays base64-encoded TTS audio outside the live WS flow (e.g. coding
-  // challenge intro/ack), reusing the same speaking-indicator state.
-  const playAgentAudio = useCallback((audioB64: string) => {
+  // drainAudioQueueRef: dequeues and plays the next audio clip if nothing is
+  // currently playing. Assigned on every render (all deps are refs/stable setters)
+  // so it's always fresh; called via ref for safe recursive invocation from onended.
+  const drainAudioQueueRef = useRef<() => void>(() => {});
+  drainAudioQueueRef.current = () => {
+    if (isPlayingAudioRef.current || audioQueueRef.current.length === 0) return;
+
+    const audioB64 = audioQueueRef.current.shift()!;
     const binary = atob(audioB64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const blob = new Blob([bytes], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+
     agentAudioRef.current = audio;
+    isPlayingAudioRef.current = true;
     setSpeaking(true);
-    audio.onended = () => {
-      agentAudioRef.current = null;
-      setSpeaking(false);
-      URL.revokeObjectURL(url);
+
+    const signalEnd = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "audio_ended" }));
+      }
     };
+
+    const onDone = () => {
+      agentAudioRef.current = null;
+      isPlayingAudioRef.current = false;
+      micGraceUntilRef.current = Date.now() + 500; // hold mic mute 500ms after audio ends
+      URL.revokeObjectURL(url);
+      signalEnd();
+      if (audioQueueRef.current.length > 0) {
+        drainAudioQueueRef.current(); // more clips queued — keep speaking state true
+      } else {
+        setSpeaking(false);
+      }
+    };
+
+    audio.onended = onDone;
     audio.onerror = () => {
       agentAudioRef.current = null;
+      isPlayingAudioRef.current = false;
+      micGraceUntilRef.current = Date.now() + 500;
       setSpeaking(false);
       URL.revokeObjectURL(url);
+      signalEnd(); // release backend response_lock even on error
+      drainAudioQueueRef.current();
     };
-    audio.play().catch(() => { agentAudioRef.current = null; setSpeaking(false); });
+    audio.play().catch(() => {
+      agentAudioRef.current = null;
+      isPlayingAudioRef.current = false;
+      micGraceUntilRef.current = Date.now() + 500;
+      setSpeaking(false);
+      signalEnd(); // release backend response_lock even on play() rejection
+      drainAudioQueueRef.current();
+    });
+  };
+
+  // Plays base64-encoded TTS audio (e.g. coding challenge intro/ack).
+  // Goes through the same queue so challenge audio never overlaps interview audio.
+  const playAgentAudio = useCallback((audioB64: string) => {
+    audioQueueRef.current.push(audioB64);
+    drainAudioQueueRef.current();
   }, []);
 
   const announceAgentText = useCallback(
@@ -222,6 +269,8 @@ export function useInterviewSession() {
         processor.onaudioprocess = (event) => {
           const ws = wsRef.current;
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          if (isPlayingAudioRef.current) return; // mute mic while agent is speaking
+          if (Date.now() < micGraceUntilRef.current) return; // grace period after agent audio ends
           const channel = event.inputBuffer.getChannelData(0);
           ws.send(encodePcm16(channel, audioCtx.sampleRate));
         };
@@ -348,31 +397,8 @@ export function useInterviewSession() {
               setInterim(payload.text);
             }
           } else if (payload.type === "agent_audio") {
-            const binary = atob(payload.audio_b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const blob = new Blob([bytes], { type: "audio/mpeg" });
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            agentAudioRef.current = audio;
-            setSpeaking(true);
-            audio.onended = () => {
-              agentAudioRef.current = null;
-              setSpeaking(false);
-              URL.revokeObjectURL(url);
-            };
-            audio.onerror = () => {
-              agentAudioRef.current = null;
-              setSpeaking(false);
-              URL.revokeObjectURL(url);
-            };
-            audio.play().catch(() => { agentAudioRef.current = null; setSpeaking(false); });
-          } else if (payload.type === "agent_interrupt") {
-            if (agentAudioRef.current) {
-              agentAudioRef.current.pause();
-              agentAudioRef.current = null;
-            }
-            setSpeaking(false);
+            audioQueueRef.current.push(payload.audio_b64);
+            drainAudioQueueRef.current();
           } else if (
             payload.type === "agent_intro" ||
             payload.type === "agent_response"

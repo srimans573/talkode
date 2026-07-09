@@ -346,11 +346,6 @@ function TestResultsPanel({
   const examplesPassed = results.filter((r) => r.passed).length;
   const selected = results[tab] ?? null;
 
-  const inputLabel = (desc: string) => {
-    const colonIdx = desc.indexOf(":");
-    return colonIdx >= 0 ? desc.slice(colonIdx + 1).trim() : desc;
-  };
-
   return (
     // Fixed 220px height so the detail section always has room to render
     <div className="shrink-0 border-t border-[var(--tk-border)] bg-[var(--tk-bg-elevated)]" style={{ height: 220 }}>
@@ -405,9 +400,9 @@ function TestResultsPanel({
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             <div className="space-y-2 text-xs">
               <div>
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--tk-text-dim)]">Input</div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--tk-text-dim)]">Test case</div>
                 <pre className="tk-mono whitespace-pre-wrap break-all rounded bg-[var(--tk-bg)] px-2.5 py-1.5 text-[var(--tk-text-muted)]">
-                  {inputLabel(selected.desc) || "—"}
+                  {selected.desc || "—"}
                 </pre>
               </div>
 

@@ -57,6 +57,13 @@ async def interview_ws(websocket: WebSocket, session_id: str):
     transcript_queue: asyncio.Queue[str | None] = asyncio.Queue()
     utterance_buffer: list[str] = []
 
+    # response_lock: True while agent audio is playing on the frontend.
+    # Cleared by the audio_ended signal from the frontend.
+    # Prevents generating a second response while the first is still playing.
+    # last_utterance: deduplicates consecutive identical transcript segments
+    # (Deepgram occasionally fires UtteranceEnd twice for the same speech).
+    state = {"response_lock": False, "last_utterance": ""}
+
     deepgram = DeepgramClient(DEEPGRAM_API_KEY)
     dg_connection = deepgram.listen.asyncwebsocket.v("1")
 
@@ -85,16 +92,8 @@ async def interview_ws(websocket: WebSocket, session_id: str):
         except Exception as e:
             print(f"[utterance_end] error: {e}")
 
-    async def on_speech_started(self, **kwargs):
-        # Candidate started speaking — stop any in-progress TTS audio on the frontend.
-        try:
-            await websocket.send_json({"type": "agent_interrupt"})
-        except Exception:
-            pass
-
     dg_connection.on(LiveTranscriptionEvents.Transcript, on_transcript)
     dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
-    dg_connection.on(LiveTranscriptionEvents.SpeechStarted, on_speech_started)
 
     options = LiveOptions(
         model="nova-2",
@@ -116,6 +115,22 @@ async def interview_ws(websocket: WebSocket, session_id: str):
             if sentence is None:
                 break
 
+            # Block until previous agent audio has finished playing on the frontend,
+            # preventing a second utterance from generating a response while the first
+            # is still mid-playback. Frontend signals completion via "audio_ended".
+            # 12s timeout guards against lost signals (network drop, JS error, etc.).
+            lock_deadline = time.time() + 12.0
+            while state["response_lock"] and time.time() < lock_deadline:
+                await asyncio.sleep(0.05)
+            state["response_lock"] = False  # ensure cleared after timeout
+
+            # Drop consecutive duplicates — Deepgram occasionally fires
+            # UtteranceEnd twice for the same segment.
+            if sentence == state["last_utterance"]:
+                print(f"[agent_loop] dedup: dropping repeated utterance {sentence!r}")
+                continue
+            state["last_utterance"] = sentence
+
             chunk = {"text": sentence, "timestamp_ms": int(time.time() * 1000), "is_final": True}
             await r.rpush(f"session:{session_id}:transcript_chunks", json.dumps(chunk))
             await websocket.send_json({"type": "transcript_chunk", "text": sentence, "is_final": True})
@@ -132,6 +147,8 @@ async def interview_ws(websocket: WebSocket, session_id: str):
                     audio_b64 = await synthesize(response)
 
                     if audio_b64:
+                        state["response_lock"] = True
+                        utterance_buffer.clear()  # discard any speech captured during response gen
                         await websocket.send_json({
                             "type": "agent_audio",
                             "audio_b64": audio_b64,
@@ -167,7 +184,12 @@ async def interview_ws(websocket: WebSocket, session_id: str):
                 # Always forward mic audio — keeps Deepgram connection alive
                 await dg_connection.send(message["bytes"])
             elif message.get("text"):
-                pass  # no client→server text messages needed right now
+                try:
+                    msg = json.loads(message["text"])
+                    if msg.get("type") == "audio_ended":
+                        state["response_lock"] = False
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:
