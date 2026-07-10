@@ -87,6 +87,34 @@ def _last_agent_turn(history: list[dict]) -> str | None:
     return None
 
 
+def _build_topic_context(meta: dict, stage: int) -> str:
+    """Return a compact string telling the LLM exactly which rubric topics are
+    covered, which is current, and what remains.  Replaces the old 'stages_done'
+    integer context which became meaningless once stage > number of topics."""
+    rubric_topics = meta.get("rubric_topics", [])
+    if not rubric_topics:
+        return ""
+    covered = rubric_topics[:stage]
+    current = rubric_topics[stage] if stage < len(rubric_topics) else None
+    remaining_after = rubric_topics[stage + 1:] if stage + 1 < len(rubric_topics) else []
+
+    parts: list[str] = []
+    if covered:
+        parts.append(
+            "TOPICS ALREADY FULLY COVERED — NEVER revisit or ask about these again:\n"
+            + "\n".join(f"- {t}" for t in covered)
+        )
+    if current:
+        parts.append(f"Current topic: {current}")
+        if remaining_after:
+            parts.append(f"Still to cover after this: {', '.join(remaining_after)}")
+        else:
+            parts.append("This is the last topic — wrap up naturally after the candidate answers.")
+    else:
+        parts.append("All rubric topics have been covered. Give a brief closing statement.")
+    return "\n".join(parts)
+
+
 def _is_echo(utterance: str, last_agent: str) -> bool:
     """Return True if the utterance looks like the mic picked up the agent's own audio.
 
@@ -315,7 +343,12 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> tuple[str | None, bo
             await r.set(f"session:{session_id}:interview_complete", "1")
             log.info("[interview] marked complete")
         elif response and "NONE" not in response.upper():
-            await advance_stage(session_id, r)
+            # Only advance to the next rubric topic when the answer was accepted
+            # (affirmed=True) OR after 3 failed attempts (force-advance).
+            # Previously this advanced unconditionally, keeping stage_attempts
+            # stuck at 1 and making the nudge/force-advance paths dead code.
+            if result.get("affirmed") or attempts >= 3:
+                await advance_stage(session_id, r)
             if await should_trigger_challenge(session_id, r):
                 await r.set(f"session:{session_id}:challenge_triggered", "1")
                 challenge_ready = True
@@ -326,7 +359,22 @@ async def maybe_respond(session_id: str, r: redis.Redis) -> tuple[str | None, bo
         if attempts >= 3 and response and "NONE" not in response.upper():
             await advance_stage(session_id, r)
     elif intent == "question":
-        response = await _answer_candidate_question(meta, code, utterance, history_text, stage, guidelines)
+        # Detect meta-questions about interview progress and answer them directly
+        # rather than letting the LLM ignore them and push on the current topic.
+        _progress_kw = ["how many", "more question", "how long", "time left",
+                        "almost done", "questions left", "still have", "how much longer"]
+        if any(kw in utterance.lower() for kw in _progress_kw):
+            rubric_topics = meta.get("rubric_topics", [])
+            total = len(rubric_topics)
+            remaining = max(0, total - stage)
+            if remaining == 0:
+                response = "We've actually just wrapped up all the topics — just finishing up now."
+            elif remaining == 1:
+                response = "Just one topic left after this — we're almost done."
+            else:
+                response = f"We've covered {stage} of {total} topics so far — {remaining} left including the current one."
+        else:
+            response = await _answer_candidate_question(meta, code, utterance, history_text, stage, guidelines)
     elif intent == "stuck":
         response = await _guide_response(meta, code, utterance, history_text, stage, guidelines)
     elif intent == "decision":
@@ -380,10 +428,7 @@ async def _validate_and_followup(
     about_to_pause: bool = False,
 ) -> dict:
     force_advance = attempts >= 3
-    stages_done = (
-        f"Rubric stages 0 through {stage - 1} have already been fully covered — do NOT revisit them. "
-        f"You are currently on stage {stage}."
-    ) if stage > 0 else f"You are on stage 0 — the first rubric topic."
+    topic_context = _build_topic_context(meta, stage)
 
     if about_to_pause:
         instruction = """The conversation is about to pause for a short coding detour right after this turn.
@@ -400,7 +445,9 @@ async def _validate_and_followup(
         instruction = (
             "The candidate's first answer touched on this area but missed something. "
             "Give ONE specific nudge that points at the gap — then immediately ask a direct follow-up question "
-            "so they can fill it in. Do NOT just make a statement and go silent. End with a question."
+            "so they can fill it in. Do NOT just make a statement and go silent. End with a question. "
+            "IMPORTANT: if the answer was actually substantially correct even if worded imperfectly, "
+            "return affirmed=true and move on rather than probing deeper."
         )
     else:
         instruction = """Bias toward accepting and moving on.
@@ -435,8 +482,7 @@ Conversation so far:
 
 Your last question: "{last_agent or '(none)'}"
 Candidate just answered: "{utterance}"
-Current rubric stage: {stage}
-{stages_done}
+{topic_context}
 Times this area has been probed: {attempts}
 
 {instruction}
@@ -483,6 +529,8 @@ async def _validate_claim(
 ) -> str:
     force_advance = attempts >= 3
 
+    topic_context = _build_topic_context(meta, stage)
+
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
 
@@ -493,7 +541,7 @@ Conversation so far:
 {history}
 
 Candidate just claimed: "{utterance}"
-Current rubric stage: {stage}
+{topic_context}
 Times this area has been probed: {attempts}
 
 {"IMPORTANT: This area has been probed " + str(attempts) + " times. Wrap it up now — affirm what they got right, briefly note what was missed if anything, then move on to the next rubric area." if force_advance else """Confirm or correct their claim in 1-2 sentences.
@@ -512,6 +560,8 @@ async def _answer_candidate_question(
     meta: dict, code: str, utterance: str,
     history: str, stage: int, guidelines: str
 ) -> str:
+    topic_context = _build_topic_context(meta, stage)
+
     user = f"""Interview rubric:
 {guidelines or "(no rubric provided)"}
 
@@ -522,7 +572,7 @@ Conversation so far:
 {history}
 
 Candidate asked: "{utterance}"
-Current rubric stage: {stage}
+{topic_context}
 
 Answer directly and practically in 1-2 sentences.
 If answering would give away the solution, redirect instead with something like "What do you think?" or "Try it and see what happens."
